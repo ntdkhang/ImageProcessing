@@ -1,0 +1,214 @@
+#include <iostream>
+#include <filesystem>
+#include <opencv2/core/saturate.hpp>
+#include <opencv2/core/types.hpp>
+#include <opencv2/imgproc.hpp>
+#include <string>
+#include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/highgui.hpp>
+#include <opencv2/features2d.hpp>
+#include <opencv2/xfeatures2d.hpp>
+#include <opencv2/ml.hpp>
+
+
+using namespace cv;
+using namespace cv::ml;
+using std::cout;
+using std::vector;
+using std:: string;
+
+void adjust_brightness(Mat& img) {
+    double avg_brightness = cv::mean(img)[0] / 255; // cv::mean returns a Scalar (4-element vector). In this case, only the first element have a value, 
+                                                    // all other 3 elements is 0. So get first element 
+                                                    // adjust brightness
+    if (avg_brightness > 0.6 || avg_brightness < 0.4) {
+        // decrease brightness
+        double factor = 0.5 / avg_brightness;
+        Mat new_img(img.size(), CV_8UC1, Scalar(0));
+        Mat look_up_table(1, 256, CV_8U);
+        uchar* p = look_up_table.ptr();
+        for (int i = 0; i < 256; i++) {
+            p[i] = saturate_cast<uchar>(i * factor);
+        }
+        LUT(img, look_up_table, new_img);
+        img = new_img;
+    }
+}
+
+Mat question1(Mat& img, std::string img_name, bool write_file = false) {
+    adjust_brightness(img);
+    // resize
+    Mat img_200, img_50;
+    resize(img, img_200, Size(200, 200));
+    resize(img, img_50, Size(50, 50));
+    if (write_file) {
+        std::string dir = "./ResultImgs/" + img_name;
+        imwrite(dir + "_200.jpg", img_200);
+        imwrite(dir + "_50.jpg", img_50);
+    }
+    img_50.convertTo(img_50, CV_32F);
+    img_50 = img_50.reshape(1, 1);
+    return img_50;
+}
+
+Mat question2(const Mat& img, std::string img_name, bool write_file = false) {
+    cv::Ptr<SiftFeatureDetector> detector = SiftFeatureDetector::create();
+    std::vector<KeyPoint> keypoints;
+    detector->detect(img, keypoints);
+
+    Mat sift_features;
+    drawKeypoints(img, keypoints, sift_features);
+    if (write_file) {
+        std::string dir = "./ResultImgs/" + img_name;
+        imwrite(dir + "_SIFT.jpg", sift_features);
+    }
+    sift_features.convertTo(sift_features, CV_32F);
+    sift_features = sift_features.reshape(1, 1);
+    return sift_features;
+}
+
+Mat question3(const Mat& img, string img_name, bool write_file) {
+    Mat hist;
+    int hist_size = 256;
+    float range[] = {0, 256};
+    const float* hist_range[] = {range};
+    calcHist(&img, 1, 0, Mat(), hist, 1, &hist_size, hist_range);
+
+
+    int hist_w = 512, hist_h = 400;
+    int bin_w = cvRound((double) hist_w / hist_size);
+    Mat hist_img = Mat::zeros(hist_h, hist_w, CV_8UC1);
+    normalize(hist, hist, 0, hist_img.rows, NORM_MINMAX, -1, Mat());
+
+    for (int i = 1; i < hist_size; i++) {
+        int bin_val = cvRound(hist.at<float>(i - 1));
+        int next_bin_val = cvRound(hist.at<float>(i));
+        line(hist_img, Point(bin_w*(i-1), hist_h - bin_val), 
+                Point(bin_w*(i), hist_h - next_bin_val),
+                Scalar(255, 0 , 0), 2, 8, 0);
+    }
+
+    if (write_file) {
+        string dir = "./ResultImgs/" + img_name;
+        imwrite(dir + "_histogram.jpg", hist_img);
+    }
+    hist_img.convertTo(hist_img, CV_32F);
+    hist_img = hist_img.reshape(1, 1);
+    // cout << hist_img.size << std::endl;
+    return hist_img;
+}
+
+
+
+void question4(Ptr<StatModel> model, Mat train_data, Mat train_label) {
+    // Ptr<KNearest> model = KNearest::create();
+    Ptr<TrainData> data = TrainData::create(train_data, ml::ROW_SAMPLE, train_label);
+    data->setTrainTestSplitRatio(0.2, true);
+    model->train(data);
+    auto error = model->calcError(data, true, train_label);
+    
+    Mat img;
+    Mat test_data;
+    Mat test_label;
+    for (const auto &entry : std::filesystem::directory_iterator{ "./ProjData/Test/bedroom" }) {
+        img = imread(entry.path(), IMREAD_GRAYSCALE);
+        adjust_brightness(img);
+        test_data.push_back(question3(img, "", false));
+        Mat label = Mat::ones(1, 1, CV_32S);
+        label.at<int>(0, 0) = 0;
+        test_label.push_back(label);
+    }
+    for (const auto &entry : std::filesystem::directory_iterator{ "./ProjData/Test/coast" }) {
+        img = imread(entry.path(), IMREAD_GRAYSCALE);
+        adjust_brightness(img);
+        test_data.push_back(question3(img, "", false));
+        Mat label = Mat::ones(1, 1, CV_32S);
+        label.at<int>(0, 0) = 1;
+        test_label.push_back(label);
+    }
+    for (const auto &entry : std::filesystem::directory_iterator{ "./ProjData/Test/forest" }) {
+        img = imread(entry.path(), IMREAD_GRAYSCALE);
+        adjust_brightness(img);
+        test_data.push_back(question3(img, "", false));
+        Mat label = Mat::ones(1, 1, CV_32S);
+        label.at<int>(0, 0) = 2;
+        test_label.push_back(label);
+    }
+    
+    Ptr<TrainData> test_ptr = TrainData::create(test_data, ml::ROW_SAMPLE, test_label);
+    auto test_result = model->calcError(test_ptr, false, test_label);
+    cout << "Accuracy on test: " << 100.0 - test_result << "%\n";
+
+    int false_positive = 0, false_negative = 0;
+    Mat predicted;
+    cout << "test_label size: " << test_label.size << std::endl;
+    for (int i = 0; i < test_label.rows; i++) {
+        cout << "Label at " << i << ": " << test_label.at<int>(1, 0) << '\n';
+    }
+    cout << "label.at 0: " << test_label.at<int>(0);
+    cout << "label.at 1: " << test_label.at<int>(1);
+    cout << "label.at 2: " << test_label.at<int>(2);
+    cout << "before predict";
+    model->predict(test_data, predicted);
+    for (int i = 0; i < test_data.rows; ++i) {
+        if (predicted.at<int>(i) != test_label.at<int>(i)) {
+            false_positive++;
+        }
+    }
+    cout << "False positive: " << 100 * (1.0 - ((double) false_positive / test_data.rows)) << std::endl;
+}
+
+int main() {
+    // iterate over the files
+    // std::string parent = "/Users/dk/Documents/School/CS4391/Assignments/TermProject/ProjData/Test/bedroom";
+    std::string parent = "./ProjData/Train/bedroom";
+    std::string img_name;
+    Mat img;
+    Mat train_data;
+    Mat train_label;
+    bool write_file = false;
+    for (const auto & entry : std::filesystem::directory_iterator{parent}) {
+        // read as grayscale
+        img = imread(entry.path(), IMREAD_GRAYSCALE); 
+        img_name = entry.path().stem();
+        // question1(img, img_name, write_file);
+        // question2(img, img_name, write_file);
+        train_data.push_back(question3(img, img_name, write_file));
+        Mat label = Mat::ones(1, 1, CV_32S);
+        label.at<int>(0, 0) = 0;
+        train_label.push_back(label); // bedroom
+    }
+
+    parent = "./ProjData/Train/Coast";
+    for (const auto & entry : std::filesystem::directory_iterator{parent}) {
+        // read as grayscale
+        img = imread(entry.path(), IMREAD_GRAYSCALE); 
+        img_name = entry.path().stem();
+        Ptr<Mat> dataPtr;
+        // question1(img, img_name, write_file);
+        // question2(img, img_name, write_file);
+        train_data.push_back(question3(img, img_name, write_file));
+        Mat label = Mat::ones(1, 1, CV_32S);
+        label.at<int>(0, 0) = 1;
+        train_label.push_back(label); // bedroom
+    }
+
+    parent = "./ProjData/Train/Forest";
+    for (const auto & entry : std::filesystem::directory_iterator{parent}) {
+        // read as grayscale
+        img = imread(entry.path(), IMREAD_GRAYSCALE); 
+        img_name = entry.path().stem();
+        Ptr<Mat> dataPtr;
+        // question1(img, img_name, write_file);
+        // question2(img, img_name, write_file);
+        train_data.push_back(question3(img, img_name, write_file));
+        Mat label = Mat::ones(1, 1, CV_32S);
+        label.at<int>(0, 0) = 2;
+        train_label.push_back(label); // bedroom
+    }
+    Ptr<StatModel> model = KNearest::create();
+    question4(model, train_data, train_label);
+
+    return 0;
+}

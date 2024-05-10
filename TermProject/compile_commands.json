@@ -1,0 +1,7 @@
+[
+{
+  "directory": "/Users/dk/Documents/School/CS4391/Assignments/TermProject",
+  "command": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/c++  -isystem /usr/local/include/opencv4  -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX13.0.sdk -mmacosx-version-min=12.5 -std=gnu++20 -o CMakeFiles/TermProject.dir/TermProject.cpp.o -c /Users/dk/Documents/School/CS4391/Assignments/TermProject/TermProject.cpp",
+  "file": "/Users/dk/Documents/School/CS4391/Assignments/TermProject/TermProject.cpp"
+}
+]
